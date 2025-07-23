@@ -13,12 +13,23 @@ return new class extends Migration
     {
         Schema::create('users', function (Blueprint $table) {
             $table->id();
-            $table->string('name');
+            $table->string('nom');
+            $table->string('prenom');
             $table->string('email')->unique();
             $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
+            $table->enum('role', ['emprunteur', 'bibliothecaire', 'administrateur'])->default('emprunteur');
+            $table->string('numero_etudiant', 50)->unique()->nullable();
+            $table->string('telephone', 20)->nullable();
+            $table->text('adresse')->nullable();
+            $table->timestamp('date_inscription')->useCurrent();
+            $table->enum('statut', ['actif', 'suspendu', 'inactif'])->default('actif');
             $table->rememberToken();
             $table->timestamps();
+            
+            $table->index(['email']);
+            $table->index(['role']);
+            $table->index(['numero_etudiant']);
         });
 
         Schema::create('password_reset_tokens', function (Blueprint $table) {
