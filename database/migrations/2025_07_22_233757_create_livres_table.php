@@ -26,7 +26,7 @@ return new class extends Migration
             $table->integer('nombre_exemplaires')->default(1);
             $table->integer('nombre_disponibles')->default(1);
             $table->string('emplacement', 100)->nullable();
-            $table->enum('statut', ['disponible', 'indisponible', 'maintenance'])->default('disponible');
+            $table->enum('statut', ['disponible', 'indisponible', 'maintenance','reserve','emprunte','perdu'])->default('disponible');
             $table->timestamps();
             
             $table->index(['titre']);

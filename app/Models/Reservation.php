@@ -60,6 +60,11 @@ class Reservation extends Model
         return $query->where('statut', 'annulee');
     }
 
+    public function scopeEnAttente($query)
+    {
+        return $query->where('statut', 'active');
+    }
+
     public function scopeParUtilisateur($query, $userId)
     {
         return $query->where('user_id', $userId);
@@ -235,4 +240,3 @@ class Reservation extends Model
         });
     }
 }
-

@@ -12,18 +12,18 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
 use Spatie\Permission\Models\Role;
+use Illuminate\Validation\Rule;
 
 class UserController extends Controller
 {
     /**
-     * Récupérer tous les utilisateurs (admin/bibliothécaire)
+     * Récupérer tous les utilisateurs (administrateur/bibliothecaire)
      */
     public function index(Request $request): JsonResponse
     {
         try {
             $user = Auth::user();
-
-            if (!$user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if (!$user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Accès non autorisé'
@@ -40,17 +40,29 @@ class UserController extends Controller
             if ($request->has('search')) {
                 $search = $request->search;
                 $query->where(function($q) use ($search) {
-                    $q->where('name', 'like', "%{$search}%")
+                    $q->where('nom', 'like', "%{$search}%")
+                      ->orWhere('prenom', 'like', "%{$search}%")
                       ->orWhere('email', 'like', "%{$search}%")
                       ->orWhere('numero_etudiant', 'like', "%{$search}%");
                 });
             }
 
+            // Filtrer par statut (actif/inactif)
             if ($request->has('statut')) {
                 $query->where('statut', $request->statut);
             }
 
-            $users = $query->orderBy('created_at', 'desc')->paginate(15);
+            // Pagination
+            $perPage = $request->get('per_page', 15);
+            $users = $query->orderBy('created_at', 'desc')->paginate($perPage);
+
+            // Ajouter le rôle principal à chaque utilisateur pour l'affichage
+            $users->getCollection()->transform(function ($user) {
+                $user->role = $user->roles->first()?->name ?? 'emprunteur';
+                // Ajouter un attribut 'actif' basé sur le statut pour la compatibilité
+                $user->actif = $user->statut === 'actif';
+                return $user;
+            });
 
             return response()->json([
                 'success' => true,
@@ -67,25 +79,27 @@ class UserController extends Controller
     }
 
     /**
-     * Créer un nouvel utilisateur (admin)
+     * Créer un nouvel utilisateur
+     * Le rôle est automatiquement défini à 'emprunteur' par défaut.
      */
     public function store(Request $request): JsonResponse
     {
         try {
             $user = Auth::user();
 
-            if (!$user->hasRole('admin')) {
+            if (!$user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Accès non autorisé'
                 ], 403);
             }
 
+            // Validation des données (sans le champ role)
             $validator = Validator::make($request->all(), [
-                'name' => 'required|string|max:255',
+                'nom' => 'required|string|max:255',
+                'prenom' => 'required|string|max:255',
                 'email' => 'required|string|email|max:255|unique:users',
                 'password' => 'required|string|min:8|confirmed',
-                'role' => 'required|in:etudiant,bibliothecaire,admin',
                 'numero_etudiant' => 'nullable|string|max:20|unique:users',
                 'telephone' => 'nullable|string|max:20',
                 'adresse' => 'nullable|string|max:500',
@@ -104,8 +118,10 @@ class UserController extends Controller
 
             DB::beginTransaction();
 
+            // Créer l'utilisateur avec statut 'actif' par défaut
             $newUser = User::create([
-                'name' => $request->name,
+                'nom' => $request->nom,
+                'prenom' => $request->prenom,
                 'email' => $request->email,
                 'password' => Hash::make($request->password),
                 'numero_etudiant' => $request->numero_etudiant,
@@ -114,35 +130,46 @@ class UserController extends Controller
                 'date_naissance' => $request->date_naissance,
                 'niveau_etude' => $request->niveau_etude,
                 'filiere' => $request->filiere,
-                'statut' => 'actif',
+                'statut' => 'actif', // Utilisation de la colonne 'statut' existante
                 'email_verified_at' => now()
             ]);
 
-            // Assigner le rôle
-            $newUser->assignRole($request->role);
+            // Assigner automatiquement le rôle 'emprunteur' par défaut
+            $defaultRole = 'emprunteur';
+            
+            // Vérifier que le rôle existe
+            $role = Role::where('name', $defaultRole)->where('guard_name', 'web')->first();
+            if (!$role) {
+                // Si le rôle n'existe pas, le créer
+                $role = Role::create(['name' => $defaultRole, 'guard_name' => 'web']);
+                \Log::warning("Rôle '{$defaultRole}' créé automatiquement lors de la création d'un utilisateur");
+            }
+            
+            $newUser->assignRole($defaultRole);
 
-            // Créer une notification de bienvenue
-            Notification::create([
-                'user_id' => $newUser->id,
-                'titre' => 'Bienvenue dans la bibliothèque universitaire',
-                'message' => "Votre compte a été créé avec succès. Vous pouvez maintenant accéder à tous les services de la bibliothèque.",
-                'type' => 'success',
-                'priorite' => 'normale',
-                'statut' => 'non_lue',
-                'date_envoi' => now()
-            ]);
+            // Créer une notification de bienvenue avec le type compatible
+            Notification::creerNotificationBienvenue($newUser, $defaultRole);
 
             DB::commit();
 
             $newUser->load('roles');
+            $newUser->role = $newUser->roles->first()?->name ?? $defaultRole;
+            // Ajouter l'attribut 'actif' pour la compatibilité
+            $newUser->actif = $newUser->statut === 'actif';
 
             return response()->json([
                 'success' => true,
                 'data' => $newUser,
-                'message' => 'Utilisateur créé avec succès'
+                'message' => 'Utilisateur créé avec succès avec le rôle par défaut : ' . $defaultRole
             ], 201);
         } catch (\Exception $e) {
             DB::rollBack();
+            \Log::error('Erreur création utilisateur:', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'data' => $request->except(['password', 'password_confirmation'])
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur lors de la création de l\'utilisateur',
@@ -160,7 +187,7 @@ class UserController extends Controller
             $currentUser = Auth::user();
 
             // Vérifier les permissions
-            if (!$currentUser->hasAnyRole(['admin', 'bibliothecaire']) && $currentUser->id != $id) {
+            if (!$currentUser->hasAnyRole(['administrateur', 'bibliothecaire']) && $currentUser->id != $id) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Accès non autorisé'
@@ -173,6 +200,10 @@ class UserController extends Controller
                 'reservations.livre', 
                 'sanctions'
             ])->findOrFail($id);
+
+            $user->role = $user->roles->first()?->name ?? 'emprunteur';
+            // Ajouter l'attribut 'actif' pour la compatibilité
+            $user->actif = $user->statut === 'actif';
 
             return response()->json([
                 'success' => true,
@@ -190,6 +221,7 @@ class UserController extends Controller
 
     /**
      * Mettre à jour un utilisateur
+     * Le rôle ne peut être modifié que par un administrateur via une route séparée.
      */
     public function update(Request $request, $id): JsonResponse
     {
@@ -197,7 +229,7 @@ class UserController extends Controller
             $currentUser = Auth::user();
 
             // Vérifier les permissions
-            if (!$currentUser->hasAnyRole(['admin', 'bibliothecaire']) && $currentUser->id != $id) {
+            if (!$currentUser->hasAnyRole(['administrateur', 'bibliothecaire']) && $currentUser->id != $id) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Accès non autorisé'
@@ -207,20 +239,22 @@ class UserController extends Controller
             $user = User::findOrFail($id);
 
             $rules = [
-                'name' => 'sometimes|string|max:255',
-                'email' => 'sometimes|string|email|max:255|unique:users,email,' . $id,
-                'telephone' => 'sometimes|nullable|string|max:20',
-                'adresse' => 'sometimes|nullable|string|max:500',
-                'date_naissance' => 'sometimes|nullable|date',
-                'niveau_etude' => 'sometimes|nullable|string|max:100',
-                'filiere' => 'sometimes|nullable|string|max:100'
+                'nom' => 'required|string|max:255',
+                'prenom' => 'required|string|max:255',
+                'email' => ['required', 'email', Rule::unique('users')->ignore($id)],
+                'password' => 'nullable|string|min:8|confirmed',
+                'telephone' => 'nullable|string|max:20',
+                'adresse' => 'nullable|string|max:500',
+                'date_naissance' => 'nullable|date',
+                'numero_etudiant' => 'nullable|string|max:50',
+                'niveau_etude' => 'nullable|string|max:100',
+                'filiere' => 'nullable|string|max:100',
+                'statut' => 'in:actif,inactif', // Validation du statut
             ];
 
-            // Seuls les admins peuvent modifier certains champs
-            if ($currentUser->hasRole('admin')) {
-                $rules['role'] = 'sometimes|in:etudiant,bibliothecaire,admin';
-                $rules['statut'] = 'sometimes|in:actif,suspendu,inactif';
-                $rules['numero_etudiant'] = 'sometimes|nullable|string|max:20|unique:users,numero_etudiant,' . $id;
+            // Seuls les administrateurs peuvent modifier certains champs
+            if ($currentUser->hasRole('administrateur')) {
+                $rules['numero_etudiant'] = 'nullable|string|max:20|unique:users,numero_etudiant,' . $id;
             }
 
             $validator = Validator::make($request->all(), $rules);
@@ -236,26 +270,29 @@ class UserController extends Controller
             DB::beginTransaction();
 
             $updateData = $request->only([
-                'name', 'email', 'telephone', 'adresse', 
+                'nom', 'prenom', 'email', 'telephone', 'adresse', 
                 'date_naissance', 'niveau_etude', 'filiere'
             ]);
 
-            if ($currentUser->hasRole('admin')) {
+            // Si un nouveau mot de passe est fourni, le hacher
+            if (!empty($request->password)) {
+                $updateData['password'] = Hash::make($request->password);
+            }
+
+            if ($currentUser->hasRole('administrateur')) {
                 $updateData = array_merge($updateData, $request->only([
-                    'statut', 'numero_etudiant'
+                    'numero_etudiant', 'statut'
                 ]));
             }
 
             $user->update($updateData);
 
-            // Mettre à jour le rôle si nécessaire (admin seulement)
-            if ($request->has('role') && $currentUser->hasRole('admin')) {
-                $user->syncRoles([$request->role]);
-            }
-
             DB::commit();
 
             $user->load('roles');
+            $user->role = $user->roles->first()?->name ?? 'emprunteur';
+            // Ajouter l'attribut 'actif' pour la compatibilité
+            $user->actif = $user->statut === 'actif';
 
             return response()->json([
                 'success' => true,
@@ -264,6 +301,13 @@ class UserController extends Controller
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
+            \Log::error('Erreur modification utilisateur:', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'user_id' => $id,
+                'data' => $request->except(['password', 'password_confirmation'])
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur lors de la mise à jour de l\'utilisateur',
@@ -273,31 +317,24 @@ class UserController extends Controller
     }
 
     /**
-     * Changer le mot de passe
+     * Update user role (accessible uniquement aux administrateurs).
      */
-    public function changePassword(Request $request, $id): JsonResponse
+    public function updateRole(Request $request, $id): JsonResponse
     {
         try {
             $currentUser = Auth::user();
 
-            // Vérifier les permissions
-            if (!$currentUser->hasRole('admin') && $currentUser->id != $id) {
+            // Vérifier que l'utilisateur connecté est administrateur
+            if (!$currentUser->hasRole('administrateur')) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Accès non autorisé'
+                    'message' => 'Accès non autorisé. Seuls les administrateurs peuvent modifier les rôles.'
                 ], 403);
             }
 
-            $rules = [
-                'new_password' => 'required|string|min:8|confirmed'
-            ];
-
-            // Si ce n'est pas un admin qui change le mot de passe d'un autre utilisateur
-            if ($currentUser->id == $id) {
-                $rules['current_password'] = 'required|string';
-            }
-
-            $validator = Validator::make($request->all(), $rules);
+            $validator = Validator::make($request->all(), [
+                'role' => 'required|in:administrateur,bibliothecaire,emprunteur',
+            ]);
 
             if ($validator->fails()) {
                 return response()->json([
@@ -309,40 +346,63 @@ class UserController extends Controller
 
             $user = User::findOrFail($id);
 
-            // Vérifier le mot de passe actuel si nécessaire
-            if ($currentUser->id == $id && !Hash::check($request->current_password, $user->password)) {
+            // Vérifier que le rôle existe
+            $role = Role::where('name', $request->role)->where('guard_name', 'web')->first();
+            if (!$role) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Le mot de passe actuel est incorrect'
+                    'message' => "Le rôle '{$request->role}' n'existe pas.",
+                    'error' => "Role '{$request->role}' not found for guard 'web'"
                 ], 400);
             }
 
-            $user->update([
-                'password' => Hash::make($request->new_password)
-            ]);
+            DB::beginTransaction();
+
+            // Synchroniser les rôles (remplace tous les rôles existants)
+            $user->syncRoles([$request->role]);
+
+            // Créer une notification de changement de rôle avec le type compatible
+            Notification::creerNotificationChangementRole($user, $request->role, $currentUser);
+
+            DB::commit();
+
+            // Recharger l'utilisateur avec ses rôles
+            $user->load('roles');
+            $user->role = $user->roles->first()?->name ?? 'emprunteur';
+            // Ajouter l'attribut 'actif' pour la compatibilité
+            $user->actif = $user->statut === 'actif';
 
             return response()->json([
                 'success' => true,
-                'message' => 'Mot de passe mis à jour avec succès'
+                'message' => "Rôle de l'utilisateur modifié avec succès : {$request->role}",
+                'data' => $user
             ]);
+
         } catch (\Exception $e) {
+            DB::rollBack();
+            \Log::error('Erreur modification rôle utilisateur:', [
+                'message' => $e->getMessage(),
+                'user_id' => $id,
+                'new_role' => $request->role ?? 'N/A'
+            ]);
+
             return response()->json([
                 'success' => false,
-                'message' => 'Erreur lors de la mise à jour du mot de passe',
+                'message' => 'Erreur lors de la modification du rôle',
                 'error' => $e->getMessage()
             ], 500);
         }
     }
 
     /**
-     * Suspendre/Activer un utilisateur (admin)
+     * Toggle user status (actif/inactif) en utilisant la colonne 'statut'.
      */
-    public function toggleStatus($id): JsonResponse
+    public function toggleStatus(Request $request, $id): JsonResponse
     {
         try {
             $currentUser = Auth::user();
 
-            if (!$currentUser->hasRole('admin')) {
+            if (!$currentUser->hasRole('administrateur')) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Accès non autorisé'
@@ -358,30 +418,42 @@ class UserController extends Controller
                 ], 400);
             }
 
-            $newStatus = $user->statut === 'actif' ? 'suspendu' : 'actif';
+            // Déterminer le nouveau statut
+            $newStatus = $request->has('statut') ? $request->statut : ($user->statut === 'actif' ? 'inactif' : 'actif');
+            
+            // Validation du statut
+            if (!in_array($newStatus, ['actif', 'inactif'])) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Statut invalide. Doit être "actif" ou "inactif".'
+                ], 400);
+            }
+
+            DB::beginTransaction();
+
             $user->update(['statut' => $newStatus]);
 
-            // Créer une notification
-            $message = $newStatus === 'actif' 
-                ? 'Votre compte a été réactivé. Vous pouvez maintenant accéder à tous les services.'
-                : 'Votre compte a été suspendu. Contactez l\'administration pour plus d\'informations.';
+            // Créer une notification de changement de statut avec le type compatible
+            Notification::creerNotificationChangementStatut($user, $newStatus);
 
-            Notification::create([
-                'user_id' => $user->id,
-                'titre' => 'Changement de statut de compte',
-                'message' => $message,
-                'type' => $newStatus === 'actif' ? 'success' : 'warning',
-                'priorite' => 'haute',
-                'statut' => 'non_lue',
-                'date_envoi' => now()
-            ]);
+            DB::commit();
+
+            // Ajouter l'attribut 'actif' pour la compatibilité
+            $user->actif = $user->statut === 'actif';
 
             return response()->json([
                 'success' => true,
                 'data' => $user,
-                'message' => "Utilisateur {$newStatus} avec succès"
+                'message' => $newStatus === 'actif' ? 'Utilisateur activé avec succès' : 'Utilisateur désactivé avec succès'
             ]);
         } catch (\Exception $e) {
+            DB::rollBack();
+            \Log::error('Erreur modification statut utilisateur:', [
+                'message' => $e->getMessage(),
+                'user_id' => $id,
+                'new_status' => $newStatus ?? 'N/A'
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur lors de la modification du statut',
@@ -391,14 +463,14 @@ class UserController extends Controller
     }
 
     /**
-     * Supprimer un utilisateur (admin)
+     * Supprimer un utilisateur (administrateur)
      */
     public function destroy($id): JsonResponse
     {
         try {
             $currentUser = Auth::user();
 
-            if (!$currentUser->hasRole('admin')) {
+            if (!$currentUser->hasRole('administrateur')) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Accès non autorisé'
@@ -438,14 +510,46 @@ class UserController extends Controller
     }
 
     /**
-     * Obtenir les statistiques des utilisateurs (admin/bibliothécaire)
+     * Get available roles (pour les administrateurs).
      */
-    public function statistics(): JsonResponse
+    public function getRoles(): JsonResponse
     {
         try {
-            $user = Auth::user();
+            $currentUser = Auth::user();
 
-            if (!$user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            // Vérifier que l'utilisateur connecté est administrateur
+            if (!$currentUser->hasRole('administrateur')) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Accès non autorisé.'
+                ], 403);
+            }
+
+            $roles = Role::where('guard_name', 'web')->get(['name', 'id']);
+
+            return response()->json([
+                'success' => true,
+                'data' => $roles
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de la récupération des rôles',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get user statistics.
+     */
+    public function getStats(): JsonResponse
+    {
+        try {
+            $currentUser = Auth::user();
+
+            if (!$currentUser->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Accès non autorisé'
@@ -453,28 +557,25 @@ class UserController extends Controller
             }
 
             $stats = [
-                'total_utilisateurs' => User::count(),
-                'utilisateurs_actifs' => User::where('statut', 'actif')->count(),
-                'utilisateurs_suspendus' => User::where('statut', 'suspendu')->count(),
-                'nouveaux_ce_mois' => User::whereMonth('created_at', now()->month)->count(),
+                'total_users' => User::count(),
+                'active_users' => User::where('statut', 'actif')->count(),
+                'inactive_users' => User::where('statut', 'inactif')->count(),
+                'administrators' => User::role('administrateur')->count(),
+                'librarians' => User::role('bibliothecaire')->count(),
+                'borrowers' => User::role('emprunteur')->count(),
+                'new_this_month' => User::whereMonth('created_at', now()->month)->count(),
                 'repartition_roles' => User::join('model_has_roles', 'users.id', '=', 'model_has_roles.model_id')
                     ->join('roles', 'model_has_roles.role_id', '=', 'roles.id')
                     ->select('roles.name as role', DB::raw('count(*) as total'))
                     ->groupBy('roles.name')
                     ->get(),
-                'utilisateurs_avec_emprunts_actifs' => User::whereHas('emprunts', function($q) {
-                    $q->where('statut', 'en_cours');
-                })->count(),
-                'utilisateurs_avec_sanctions_actives' => User::whereHas('sanctions', function($q) {
-                    $q->where('statut', 'active');
-                })->count()
             ];
 
             return response()->json([
                 'success' => true,
-                'data' => $stats,
-                'message' => 'Statistiques récupérées avec succès'
+                'data' => $stats
             ]);
+
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -485,31 +586,55 @@ class UserController extends Controller
     }
 
     /**
-     * Obtenir les rôles disponibles
+     * Rechercher des utilisateurs
      */
-    public function roles(): JsonResponse
+    public function search(Request $request): JsonResponse
     {
         try {
-            $user = Auth::user();
+            $currentUser = Auth::user();
 
-            if (!$user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if (!$currentUser->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Accès non autorisé'
                 ], 403);
             }
 
-            $roles = Role::all(['id', 'name']);
+            $query = $request->get('q', '');
+            
+            if (empty($query)) {
+                return response()->json([
+                    'success' => true,
+                    'data' => []
+                ]);
+            }
+
+            $users = User::with('roles')
+                ->where(function($q) use ($query) {
+                    $q->where('nom', 'like', "%{$query}%")
+                      ->orWhere('prenom', 'like', "%{$query}%")
+                      ->orWhere('email', 'like', "%{$query}%")
+                      ->orWhere('numero_etudiant', 'like', "%{$query}%");
+                })
+                ->limit(10)
+                ->get();
+
+            // Ajouter le rôle principal et l'attribut 'actif' à chaque utilisateur
+            $users->transform(function ($user) {
+                $user->role = $user->roles->first()?->name ?? 'emprunteur';
+                $user->actif = $user->statut === 'actif';
+                return $user;
+            });
 
             return response()->json([
                 'success' => true,
-                'data' => $roles,
-                'message' => 'Rôles récupérés avec succès'
+                'data' => $users
             ]);
+
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Erreur lors de la récupération des rôles',
+                'message' => 'Erreur lors de la recherche',
                 'error' => $e->getMessage()
             ], 500);
         }

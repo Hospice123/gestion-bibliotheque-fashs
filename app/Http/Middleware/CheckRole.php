@@ -27,8 +27,8 @@ class CheckRole
         if (!in_array($user->role, $roles)) {
             return response()->json([
                 'success' => false,
-                'message' => 'Accès non autorisé. Rôle requis: ' . implode(', ', $roles)
-            ], 403);
+                'message' => 'Accès non autorisé . Rôle requis: ' . implode(', ', $roles)
+            ], 404);
         }
 
         return $next($request);

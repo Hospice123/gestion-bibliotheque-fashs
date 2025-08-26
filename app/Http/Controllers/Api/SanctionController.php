@@ -24,7 +24,7 @@ class SanctionController extends Controller
             $query = Sanction::with(['user']);
 
             // Si l'utilisateur n'est pas admin ou bibliothécaire, ne montrer que ses sanctions
-            if (!$user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if (!$user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 $query->where('user_id', $user->id);
             }
 
@@ -37,7 +37,7 @@ class SanctionController extends Controller
                 $query->where('type', $request->type);
             }
 
-            if ($request->has('user_id') && $user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if ($request->has('user_id') && $user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 $query->where('user_id', $request->user_id);
             }
 
@@ -65,7 +65,7 @@ class SanctionController extends Controller
         try {
             $user = Auth::user();
 
-            if (!$user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if (!$user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Accès non autorisé'
@@ -74,7 +74,7 @@ class SanctionController extends Controller
 
             $validator = Validator::make($request->all(), [
                 'user_id' => 'required|exists:users,id',
-                'type' => 'required|in:retard,deterioration,perte,comportement,autre',
+                'type' => 'required|in:amende,avertissement,suspension',
                 'raison' => 'required|string|max:500',
                 'montant' => 'nullable|numeric|min:0',
                 'duree_jours' => 'nullable|integer|min:1|max:365',
@@ -117,7 +117,7 @@ class SanctionController extends Controller
                 'user_id' => $request->user_id,
                 'titre' => 'Nouvelle sanction appliquée',
                 'message' => "Une sanction de type \"{$sanction->type}\" a été appliquée à votre compte. Raison : {$sanction->raison}",
-                'type' => 'warning',
+                'type' => 'alerte',
                 'priorite' => 'haute',
                 'statut' => 'non_lue',
                 'date_envoi' => now()
@@ -152,7 +152,7 @@ class SanctionController extends Controller
             $query = Sanction::with(['user', 'appliqueeParUser', 'emprunt.livre']);
 
             // Si l'utilisateur n'est pas admin ou bibliothécaire, ne montrer que ses sanctions
-            if (!$user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if (!$user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 $query->where('user_id', $user->id);
             }
 
@@ -180,7 +180,7 @@ class SanctionController extends Controller
         try {
             $user = Auth::user();
 
-            if (!$user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if (!$user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Accès non autorisé'
@@ -240,7 +240,7 @@ class SanctionController extends Controller
         try {
             $user = Auth::user();
 
-            if (!$user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if (!$user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Accès non autorisé'
@@ -332,7 +332,7 @@ class SanctionController extends Controller
             Notification::create([
                 'user_id' => $user->id,
                 'titre' => 'Paiement confirmé',
-                'message' => "Le paiement de {$sanction->montant}€ pour la sanction \"{$sanction->type}\" a été confirmé.",
+                'message' => "Le paiement de {$sanction->montant}FCFA pour la sanction \"{$sanction->type}\" a été confirmé.",
                 'type' => 'success',
                 'priorite' => 'normale',
                 'statut' => 'non_lue',
@@ -364,7 +364,7 @@ class SanctionController extends Controller
         try {
             $user = Auth::user();
 
-            if (!$user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if (!$user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Accès non autorisé'
@@ -406,7 +406,7 @@ class SanctionController extends Controller
         try {
             $user = Auth::user();
 
-            if (!$user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if (!$user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Accès non autorisé'
@@ -430,5 +430,103 @@ class SanctionController extends Controller
             ], 500);
         }
     }
+
+    public function mySanctions(Request $request): JsonResponse
+    {
+        try {
+            $user = Auth::user();
+            $query = Sanction::with(["user"]);
+
+            $sanctions = $query->where("user_id", $user->id)->orderBy("created_at", "desc")->paginate(15);
+
+            return response()->json([
+                "success" => true,
+                "data" => $sanctions,
+                "message" => "Mes sanctions récupérées avec succès"
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                "success" => false,
+                "message" => "Erreur lors de la récupération de mes sanctions",
+                "error" => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Prolonger une sanction (admin/bibliothécaire)
+     */
+    public function prolonger(Request $request, $id): JsonResponse
+    {
+        try {
+            $user = Auth::user();
+
+            if (!$user->hasAnyRole(["administrateur", "bibliothecaire"])) {
+                return response()->json([
+                    "success" => false,
+                    "message" => "Accès non autorisé"
+                ], 403);
+            }
+
+            $sanction = Sanction::findOrFail($id);
+
+            if ($sanction->statut !== "active") {
+                return response()->json([
+                    "success" => false,
+                    "message" => "Cette sanction ne peut pas être prolongée"
+                ], 400);
+            }
+
+            $validator = Validator::make($request->all(), [
+                "jours" => "required|integer|min:1",
+                "raison" => "nullable|string|max:255",
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    "success" => false,
+                    "message" => "Données de validation invalides",
+                    "errors" => $validator->errors()
+                ], 422);
+            }
+
+            $jours = $request->input("jours");
+            $raison = $request->input("raison");
+
+            DB::beginTransaction();
+
+            // Prolonger la date de fin
+            $sanction->date_fin = \Carbon\Carbon::parse($sanction->date_fin)->addDays($jours);
+            $sanction->notes = $sanction->notes . "\nProlongation de {$jours} jours: {$raison}";
+            $sanction->save();
+
+            // Créer une notification pour l'utilisateur
+            Notification::create([
+                "user_id" => $sanction->user_id,
+                "titre" => "Sanction prolongée",
+                "message" => "Votre sanction de type \"{$sanction->type}\" a été prolongée de {$jours} jours. Raison: {$raison}",
+                "type" => "info",
+                "priorite" => "normale",
+                "statut" => "non_lue",
+                "date_envoi" => now()
+            ]);
+
+            DB::commit();
+
+            return response()->json([
+                "success" => true,
+                "data" => $sanction,
+                "message" => "Sanction prolongée avec succès"
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                "success" => false,
+                "message" => "Erreur lors de la prolongation de la sanction",
+                "error" => $e->getMessage()
+            ], 500);
+        }
+    }
+
 }
 

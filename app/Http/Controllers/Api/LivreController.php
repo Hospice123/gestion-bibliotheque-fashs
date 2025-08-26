@@ -19,6 +19,10 @@ class LivreController extends Controller
     {
         try {
             $query = Livre::with(['categorie']);
+             if ($request->has('statut') && $request->statut) {
+        $query->where('statut', $request->statut);
+    }
+
 
             // Recherche par terme
             if ($request->has('search') && !empty($request->search)) {
@@ -184,7 +188,7 @@ class LivreController extends Controller
             'category_id' => 'sometimes|required|exists:categories,id',
             'nombre_exemplaires' => 'sometimes|required|integer|min:1',
             'emplacement' => 'sometimes|nullable|string|max:100',
-            'statut' => 'sometimes|in:disponible,indisponible,maintenance',
+            'statut' => 'sometimes|in:disponible,indisponible,maintenance,emprunte,reserve,perdu',
             'image_couverture' => 'sometimes|nullable|image|mimes:jpeg,png,jpg,gif|max:2048'
         ]);
 

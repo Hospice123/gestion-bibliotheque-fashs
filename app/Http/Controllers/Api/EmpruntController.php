@@ -310,7 +310,7 @@ class EmpruntController extends Controller
                         'emprunt_id' => $emprunt->id,
                         'type' => 'amende',
                         'montant' => $amende,
-                        'raison' => "Retard de {$emprunt->jours_retard} jour(s) pour le livre \"{$emprunt->livre->titre}\"",
+                        'raison' => "Retard de {$emprunt->jours_retard} jour(s) pour le livre {$emprunt->livre->titre} ",
                         'appliquee_par' => $request->user()->id
                     ]);
 
@@ -396,7 +396,7 @@ class EmpruntController extends Controller
                 'emprunt_id' => $emprunt->id,
                 'type' => 'amende',
                 'montant' => $montantSanction,
-                'raison' => "Livre perdu: \"{$emprunt->livre->titre}\"",
+                'raison' => "Livre perdu:{$emprunt->livre->titre}",
                 'appliquee_par' => $request->user()->id
             ]);
 
@@ -471,43 +471,64 @@ class EmpruntController extends Controller
      * Historique des emprunts d'un utilisateur
      */
     public function historique(Request $request): JsonResponse
-    {
-        try {
-            $user = $request->user();
-            $userId = $request->get('user_id', $user->id);
+{
+    try {
+        $user = $request->user();
+        $requestedUserId = $request->get('user_id'); // Récupérer user_id s'il est présent dans la requête
 
-            // Vérifier les permissions
-            if ($userId != $user->id && !in_array($user->role, ['bibliothecaire', 'administrateur'])) {
+        $query = Emprunt::with(['livre.categorie', 'user']);
+
+
+        // Déterminer si l'utilisateur actuel est un bibliothécaire ou un administrateur
+        $isLibrarianOrAdmin = in_array($user->role, ['bibliothecaire', 'administrateur']);
+
+        // Logique de filtrage par user_id
+        if ($requestedUserId) {
+            // Si un user_id est demandé, vérifier les permissions
+            if ($requestedUserId != $user->id && !$isLibrarianOrAdmin) {
                 return response()->json([
-                    'success' => false,
+                    'success' => false ,
                     'message' => 'Non autorisé'
                 ], 403);
             }
-
-            $emprunts = Emprunt::with(['livre.categorie'])
-                              ->where('user_id', $userId)
-                              ->orderBy('date_emprunt', 'desc')
-                              ->paginate(20);
-
-            return response()->json([
-                'success' => true,
-                'data' => [
-                    'emprunts' => $emprunts->items(),
-                    'pagination' => [
-                        'current_page' => $emprunts->currentPage(),
-                        'last_page' => $emprunts->lastPage(),
-                        'total' => $emprunts->total()
-                    ]
-                ]
-            ]);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Erreur lors de la récupération de l\'historique',
-                'error' => $e->getMessage()
-            ], 500);
+            // Appliquer le filtre pour l'ID d'utilisateur demandé
+            $query->where('user_id', $requestedUserId);
+        } else {
+            // Si aucun user_id n'est demandé dans la requête (historique global ou personnel par défaut)
+            if (!$isLibrarianOrAdmin) {
+                // Si l'utilisateur n'est ni bibliothécaire ni administrateur, il ne peut voir que son propre historique
+                $query->where('user_id', $user->id);
+            }
+            // Si c'est un bibliothécaire/administrateur et aucun user_id n'est demandé,
+            // aucun filtre user_id n'est appliqué, permettant de récupérer tous les emprunts.
         }
+
+        // Appliquer les filtres de recherche, statut, date si nécessaire (non inclus dans l'extrait fourni, mais à ajouter ici)
+         if ($request->has('search')) { $query->where(...); }
+         if ($request->has('statut')) { $query->where(...); }
+         if ($request->has('date_filter')) { $query->where(...); }
+
+        $emprunts = $query->orderBy('date_emprunt','desc')->paginate(20);
+
+        return response()->json([
+           'success' => true,
+           'data' => [
+               'emprunts' => $emprunts->items(),
+               'pagination' => [
+                   'current_page' => $emprunts->currentPage(),
+                   'last_page' => $emprunts->lastPage(),
+                   'total' => $emprunts->total()
+                ]
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        return response()->json([
+           'success' => false,
+           'message' =>'Erreur lors de la récupération de l\'historique',
+           'error' => $e->getMessage()
+        ], 500);
     }
+}
 }
 

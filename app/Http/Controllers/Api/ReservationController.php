@@ -24,7 +24,7 @@ class ReservationController extends Controller
             $query = Reservation::with(['user', 'livre.categorie']);
 
             // Si l'utilisateur n'est pas admin ou bibliothécaire, ne montrer que ses réservations
-            if (!$user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if (!$user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 $query->where('user_id', $user->id);
             }
 
@@ -33,7 +33,7 @@ class ReservationController extends Controller
                 $query->where('statut', $request->statut);
             }
 
-            if ($request->has('user_id') && $user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if ($request->has('user_id') && $user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 $query->where('user_id', $request->user_id);
             }
 
@@ -159,7 +159,7 @@ class ReservationController extends Controller
             $query = Reservation::with(['user', 'livre.categorie']);
 
             // Si l'utilisateur n'est pas admin ou bibliothécaire, ne montrer que ses réservations
-            if (!$user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if (!$user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 $query->where('user_id', $user->id);
             }
 
@@ -189,7 +189,7 @@ class ReservationController extends Controller
             $query = Reservation::query();
 
             // Si l'utilisateur n'est pas admin ou bibliothécaire, ne peut annuler que ses réservations
-            if (!$user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if (!$user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 $query->where('user_id', $user->id);
             }
 
@@ -248,7 +248,7 @@ class ReservationController extends Controller
         try {
             $user = Auth::user();
 
-            if (!$user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if (!$user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Accès non autorisé'
@@ -336,7 +336,7 @@ class ReservationController extends Controller
         try {
             $user = Auth::user();
 
-            if (!$user->hasAnyRole(['admin', 'bibliothecaire'])) {
+            if (!$user->hasAnyRole(['administrateur', 'bibliothecaire'])) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Accès non autorisé'
@@ -371,5 +371,71 @@ class ReservationController extends Controller
             ], 500);
         }
     }
+    
+
+    /**
+     * Marquer une réservation comme expirée (admin/bibliothécaire)
+     */
+    public function expirer($id): JsonResponse
+    {
+        try {
+            $user = Auth::user();
+
+            if (!$user->hasAnyRole(["administrateur", "bibliothecaire"])) {
+                return response()->json([
+                    "success" => false,
+                    "message" => "Accès non autorisé"
+                ], 403);
+            }
+
+            $reservation = Reservation::with(["user", "livre"])->findOrFail($id);
+
+            if ($reservation->statut !== "active" && $reservation->statut !== "confirmee") {
+                return response()->json([
+                    "success" => false,
+                    "message" => "Cette réservation ne peut pas être marquée comme expirée"
+                ], 400);
+            }
+
+            DB::beginTransaction();
+
+            $reservation->update([
+                "statut" => "expiree",
+                "date_expiration" => now()
+            ]);
+
+            // Mettre à jour les positions dans la file d'attente
+            $this->updateQueuePositions($reservation->livre_id);
+
+            // Créer une notification pour l'utilisateur
+            Notification::create([
+                "user_id" => $reservation->user_id,
+                "titre" => "Réservation expirée",
+                "message" => "Votre réservation pour le livre \"{$reservation->livre->titre}\" a expiré.",
+                "type" => "alerte",
+                "priorite" => "normale",
+                "statut" => "non_lue",
+                "date_envoi" => now()
+            ]);
+
+            DB::commit();
+
+            return response()->json([
+                "success" => true,
+                "data" => $reservation,
+                "message" => "Réservation marquée comme expirée avec succès"
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                "success" => false,
+                "message" => "Erreur lors du marquage de la réservation comme expirée",
+                "error" => $e->getMessage()
+            ], 500);
+        }
+    }
+
+
+
 }
 

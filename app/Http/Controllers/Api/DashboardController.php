@@ -180,7 +180,7 @@ class DashboardController extends Controller
     /**
      * Statistiques détaillées
      */
-    public function statistiques(Request $request): JsonResponse
+    public function statistics(Request $request): JsonResponse
     {
         try {
             $user = $request->user();
@@ -344,7 +344,7 @@ class DashboardController extends Controller
         if ($amendes > 0) {
             $alertes[] = [
                 'type' => 'info',
-                'message' => "{$amendes}€ d'amendes à recouvrer",
+                'message' => "{$amendes}FCFA d'amendes à recouvrer",
                 'action' => 'Voir les sanctions'
             ];
         }

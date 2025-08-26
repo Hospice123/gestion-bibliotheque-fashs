@@ -40,33 +40,38 @@ class DatabaseSeeder extends Seeder
         
         // Créer quelques notifications de test
         $this->createNotifications();
+
+        //créer quelques paramètres de test
+        $this->call(SettingSeeder::class);
+
+        $this->call(RolesAndPermissionsSeeder::class); 
     }
 
     private function createUsers(): void
     {
         // Administrateur
         User::create([
-            'nom' => 'Admin',
-            'prenom' => 'Système',
-            'email' => 'admin@bibliotheque.fr',
-            'password' => Hash::make('admin123'),
+            'nom' => 'SODE',
+            'prenom' => 'Hospice',
+            'email' => 'soderoselio@gmail.com',
+            'password' => Hash::make('sode123'),
             'role' => 'administrateur',
             'numero_etudiant' => null,
-            'telephone' => '01 23 45 67 89',
-            'adresse' => 'Université de Paris, 75005 Paris',
+            'telephone' => '01 90 57 38 95',
+            'adresse' => 'Université d\'Abomey-Calavi',
             'statut' => 'actif'
         ]);
 
         // Bibliothécaire
         User::create([
-            'nom' => 'Martin',
-            'prenom' => 'Sophie',
-            'email' => 'sophie.martin@bibliotheque.fr',
-            'password' => Hash::make('biblio123'),
+            'nom' => 'SODE',
+            'prenom' => 'Vially',
+            'email' => 'viallysode@gmail.com',
+            'password' => Hash::make('vially123'),
             'role' => 'bibliothecaire',
             'numero_etudiant' => null,
             'telephone' => '01 23 45 67 90',
-            'adresse' => 'Université de Paris, 75005 Paris',
+            'adresse' => 'Université d\'Abomey-Calavi',
             'statut' => 'actif'
         ]);
 
@@ -418,7 +423,7 @@ class DatabaseSeeder extends Seeder
             'user_id' => 5, // Pierre Moreau (qui a un livre en retard)
             'emprunt_id' => 3,
             'type' => 'amende',
-            'montant' => 3.00,
+            'montant' => 500,
             'raison' => 'Retard de 6 jours pour le livre "Analyse mathématique I"',
             'statut' => 'active',
             'appliquee_par' => 2 // Sophie Martin (bibliothécaire)
@@ -449,7 +454,7 @@ class DatabaseSeeder extends Seeder
         Notification::create([
             'user_id' => 5, // Pierre Moreau
             'titre' => 'Livre en retard',
-            'message' => 'Le livre "Analyse mathématique I" est en retard de 6 jour(s). Une amende de 3,00€ a été appliquée.',
+            'message' => 'Le livre "Analyse mathématique I" est en retard de 6 jour(s). Une amende de 500 FCFA a été appliquée.',
             'type' => 'alerte',
             'lue' => false
         ]);

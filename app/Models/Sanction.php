@@ -178,7 +178,7 @@ class Sanction extends Model
         $this->update([
             'statut' => 'payee',
             'notes' => $this->notes . "\nPayée le " . now()->format('d/m/Y à H:i') . 
-                      " - Montant: {$montantPaye}€"
+                      " - Montant: {$montantPaye}FCFA"
         ]);
 
         return true;

@@ -16,7 +16,7 @@ return new class extends Migration
             $table->foreignId('user_id')->constrained('users')->onDelete('cascade');
             $table->string('titre');
             $table->text('message');
-            $table->enum('type', ['info', 'rappel', 'alerte', 'sanction']);
+            $table->enum('type', ['info', 'rappel', 'alerte', 'sanction','success']);
             $table->boolean('lue')->default(false);
             $table->timestamp('date_envoi')->useCurrent();
             $table->timestamp('date_lecture')->nullable();
